@@ -4,148 +4,215 @@
 
 DSH Tool Gate reduces standing model-context cost from large tool suites without changing how the underlying tools execute.
 
-The target behavior is capability-level progressive disclosure:
+The implemented behavior is capability-level progressive disclosure:
 
 1. DSH and plugins register tools normally.
-2. Tool Gate discovers the final registry and groups tools by trustworthy origin.
-3. Large specialist groups are hidden from one agent's model-visible tool set using DSH's scoped restriction mechanism.
-4. A tiny always-visible `enable_toolset` capability tells the model which optional capability groups exist.
-5. When the agent enables a group, the scoped restriction is replaced so that group's full native tools become visible on the next model step.
-6. Enabled groups remain visible for that agent/session unless explicitly disabled by future policy.
+2. Tool Gate reads one agent's effective native tool surface before its first driving request.
+3. MCP tools are grouped by DSH's documented `mcp__<serverName>__<tool>` public naming contract; non-MCP groups come from explicit policy rules.
+4. Lazy groups are hidden with an agent-scoped `ctx.tools.restrict()` deny mask.
+5. A tiny scoped `enable_toolset` tool tells the model which optional capability groups exist.
+6. When the agent enables a group, Tool Gate replaces the restriction so that group's full native tools become visible on the next model step.
+7. Enabled groups remain visible for that agent/session.
+8. Real `tools/change` events trigger a coalesced catalog rebuild so MCP list changes and plugin HMR are re-gated.
 
 ## Why this shape
 
-DeepSeek Harness already keeps tool presentation, lookup, and execution aligned through the tool registry. Its documented progressive-disclosure mechanism is to replace a scoped `ctx.tools.restrict()` registration as the visible set changes. Tool Gate should use that seam rather than invent a second dispatch path.
+DeepSeek Harness already keeps tool presentation, lookup, and execution aligned through the tool registry. Its current extension cookbook explicitly identifies replacing a scoped `ctx.tools.restrict()` registration as the mechanism for ToolSearch/progressive disclosure.
 
 This differs intentionally from MCP search/call gateways. Once a toolset is enabled, the model sees and calls the original native tool definitions directly.
+
+## Verified DSH findings
+
+The scaffold's discovery spike resolved the open questions against current DSH:
+
+### Scoped restriction is the correct native seam
+
+`ctx.tools.restrict({ allow?, deny? })`:
+
+- requires an agent/scoped context;
+- removes hidden global/inherited tools from presentation, lookup, and execution together;
+- leaves scope-local registrations visible;
+- returns an exact disposer;
+- emits `tools/change` when the restriction changes.
+
+This is exactly the behavior Tool Gate needs.
+
+### Agent lifecycle is early enough
+
+`agent/session-start` is emitted synchronously before the first driver request. Tool Gate installs there for new agents, and also enumerates `ctx.agents.list()` so plugin hot-load/reload can cover already-live agents.
+
+### MCP identity has a public deterministic naming contract
+
+DSH's MCP bridge registers every public MCP tool as:
+
+```text
+mcp__<serverName>__<rawName>
+```
+
+with normalization/hash behavior when needed for the provider's function-name constraints.
+
+Tool Gate uses only the server-qualified public prefix for grouping. It does not reconstruct the raw MCP name and does not participate in MCP execution.
+
+### General plugin registration provenance is not public
+
+The current public ToolRuntime exposes visible schemas (`name`, `description`, `parameters`) but does not expose a general registration-owner field tying each tool definition to the Cordis plugin fiber that registered it.
+
+Therefore V0 does not guess arbitrary plugin ownership. Non-MCP plugin groups use explicit public-name glob rules. This is preferable to fragile prefix heuristics that could silently hide unrelated core tools.
 
 ## Runtime model
 
 ```text
-Global DSH tool registry
+DSH tool registry
 ├── core tools
-├── CCE/plugin tools
+├── small plugin tools
 ├── Blender MCP tools
 ├── Godot MCP tools
-└── other plugin/MCP tools
+└── explicitly grouped plugin suites
         │
-        │ Tool Gate catalog + agent-scoped restriction
+        │ per-agent catalog
         ▼
-Agent A, initial
-├── selected always-on tools
+Agent A initial restriction
+├── core / ungrouped / always groups
 └── enable_toolset
 
-Agent A after enable_toolset("blender")
-├── selected always-on tools
+Agent A calls enable_toolset("blender")
+        │
+        ▼
+Agent A
+├── core / always groups
 ├── enable_toolset
-└── all native Blender MCP tools
+└── original native Blender MCP tools
 
 Agent B remains unchanged.
 ```
 
-## Core invariants
+## Restriction replacement
 
-### 1. Native execution remains authoritative
+The controller owns exactly one active Tool Gate restriction per agent.
 
-Tool Gate controls visibility only. It must not proxy, clone, rename, or reimplement specialist tool execution.
+For an ordinary enable operation, the new (less restrictive) mask is registered before the old mask is disposed. DSH restrictions intersect, so the old restriction continues protecting the surface until the new mask exists; disposing the old mask then reveals exactly the newly enabled suite.
 
-### 2. Hidden means unavailable
+For full catalog refresh, Tool Gate must briefly lift its own previous exact-name deny set so it can inspect the complete effective surface, including names added by MCP `tools/list_changed`. The lift → inspect → rebuild → re-restrict sequence is synchronous and contains no `await`, so no model request can interleave on the JavaScript event loop. Other independent DSH restrictions remain active throughout.
 
-A hidden tool must be absent from model presentation and unavailable through the same scoped lookup/execution view. Do not create a presentation-only filter that leaves hidden tools callable by name.
+## `tools/change` recursion control
 
-### 3. Agent/session scope
+Restrictions and scoped launcher registrations themselves emit `tools/change`. The plugin maintains an internal-mutation depth counter. Changes produced by Tool Gate are ignored by its registry listener; external changes are coalesced into one microtask and refresh all live controllers.
 
-Visibility changes must not mutate the process-global registry for every session. State is local to the agent/session whose capability set changed.
+This prevents self-refresh loops while still re-gating newly registered MCP tools before a later model request.
 
-### 4. Sticky expansion
+## Capability catalog
 
-Enabling a toolset is additive by default. Do not automatically unload it after one call or one turn. Stable visibility after expansion is friendlier to KV-prefix reuse than constant load/unload churn.
-
-### 5. Trustworthy grouping
-
-Prefer explicit registration provenance supplied by DSH/MCP/plugin runtime metadata. If DSH does not expose sufficient provenance, add a narrow explicit mapping/configuration seam.
-
-Do **not** silently infer ownership from names such as `blender_*` or `mcp__foo__*` as the primary mechanism.
-
-### 6. Small tools need not be gated
-
-The optimization target is large specialist schema bundles. A small, frequently useful plugin may remain always visible. Policy should eventually support thresholds and explicit overrides.
-
-### 7. Savings are measurable
-
-Diagnostics should report, at minimum:
+Each descriptor records:
 
 ```text
-toolset id | tool count | schema bytes | estimated tokens | visibility
+id
+origin
+model-facing description
+member public tool names
+default visibility
+schema bytes
+estimated schema tokens
 ```
 
-and total visible schema cost before/after gating.
+Token estimation intentionally uses the same rough 4-bytes-per-token composition heuristic as DSH's context meter. It is a diagnostic estimate, not provider billing truth.
 
-## Discovery phase
+## Model-facing loader
 
-The first implementation spike must answer these against the supported DSH version:
+`enable_toolset` is registered through `agent.ctx`, so the agent's own global restriction cannot remove it.
 
-- Can the plugin enumerate the final tool registry after MCP/plugin registration?
-- Is registration provenance/origin preserved anywhere in the registry?
-- Can an MCP client's `serverName` be recovered without parsing tool names?
-- What lifecycle hook is best for rebuilding the catalog when plugins hot-reload?
-- What exact object/disposer is returned by `ctx.tools.restrict()` and how should a restriction be replaced atomically?
-- What stable identifier should key per-agent/session Tool Gate state?
+Its description contains the compact capability catalog, for example:
 
-Do not implement heuristic discovery until these questions are resolved.
+```text
+- blender [available] — MCP capability "blender" (18 native tools). Examples: ... (~6500 schema tokens)
+- godot-ai [available] — MCP capability "godot-ai" (25 native tools). Examples: ... (~9200 schema tokens)
+```
 
-## Planned modules
+The agent therefore knows that Blender/Godot capabilities exist without carrying every member schema.
+
+After a successful load, the tool returns the number of native tools added, approximate schema tokens added, and the remaining hidden toolset ids.
+
+## Core invariants
+
+### Native execution remains authoritative
+
+Tool Gate controls visibility only. It does not proxy, clone, rename, or reimplement specialist tool execution.
+
+### Hidden means unavailable
+
+A hidden tool is absent from model presentation and unavailable through the same scoped lookup/execution view.
+
+### Agent/session scope
+
+Visibility changes never mutate the process-global registry. One agent enabling a suite does not expose it to sibling sessions.
+
+### Sticky expansion
+
+Enabling a toolset is additive for the agent lifecycle. Automatic per-turn unloading is intentionally excluded because repeated tool-set churn hurts prefix/KV stability and creates unnecessary extra model steps.
+
+### Trustworthy grouping
+
+Automatic MCP grouping relies on DSH's documented public naming contract. General plugins require explicit rules until DSH exposes tool registration provenance as a supported API.
+
+### Existing policy still wins
+
+Tool Gate builds from the agent's effective pre-gate surface. Other ancestor/agent restrictions are not removed. Enabling a Tool Gate group cannot bypass a separate DSH restriction or permission policy.
+
+### Savings are measurable
+
+With debug logging enabled, Tool Gate reports the number of hidden tools, hidden toolsets, and estimated schema tokens removed per request.
+
+## Configuration
+
+```yaml
+config:
+  enabled: true
+  autoMcp: true
+  launcherToolName: enable_toolset
+  debug: false
+  toolsets:
+    - id: github
+      description: GitHub repository, issue, and pull-request operations.
+      match: ["github_*"]
+      visibility: lazy
+
+    - id: continuity
+      match: ["cce_*"]
+      visibility: always
+```
+
+Explicit rules run before automatic MCP grouping. Overlapping explicit rules are rejected rather than resolved silently.
+
+## Modules
 
 ```text
 src/index.ts
-  plugin entrypoint and configuration
+  configuration, live-agent installation, registry refresh lifecycle
 
-src/discovery.ts
-  inspect registry and produce provenance-backed tool records
+src/gate.ts
+  one agent's catalog, restriction disposer, sticky state, enable_toolset
 
 src/catalog.ts
-  group tool records into capability/toolset descriptors
-
-src/visibility.ts
-  own agent-scoped restriction lifecycle
-
-src/tool-enable.ts
-  register the tiny always-visible enable_toolset tool
-
-src/metrics.ts
-  schema byte/token diagnostics
+  explicit grouping, automatic MCP grouping, descriptions, schema/token metrics
 
 src/types.ts
-  shared domain types
+  public domain types
 ```
 
-Only `index.ts` and `types.ts` exist in the initial scaffold.
+## Current limitation / future upstream opportunity
 
-## Planned configuration direction
+A richer V1 could automatically group arbitrary DSH plugins if ToolRuntime exposes supported registration provenance such as:
 
-Exact config is intentionally deferred until the discovery spike. Expected policy concepts include:
-
-```yaml
-always:
-  - core
-  - plugin:deepseek-harness-cce
-
-lazy:
-  - mcp:*
-
-overrides:
-  mcp:blender:
-    alias: blender
-    description: Control Blender scenes, meshes, rigs, animation, materials, and rendering.
+```text
+tool name -> registering plugin/fiber id
 ```
 
-The plugin should auto-discover newly added MCP/plugin toolsets when reliable provenance exists; configuration should express policy, not duplicate every tool schema.
+If DSH adds that API, Tool Gate can replace explicit non-MCP mappings with provenance-backed automatic groups without changing its restriction or loader architecture.
 
 ## Non-goals
 
 - Replacing MCP clients.
 - Searching individual tools one at a time.
-- Wrapping every call in a generic proxy tool.
+- Wrapping calls in a generic proxy.
 - Rewriting the DSH agent loop.
-- Persisting enabled toolsets globally across unrelated sessions by default.
-- Hiding capabilities from the model entirely; the model should know the optional groups it can enable.
+- Persisting enabled toolsets globally across unrelated sessions.
+- Guessing arbitrary plugin ownership from weak naming heuristics.
