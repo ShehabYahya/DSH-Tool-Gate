@@ -1,13 +1,19 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_CONFIG, inject, name } from '../src/index.js'
 
-describe('plugin scaffold', () => {
+describe('plugin contract', () => {
   it('exports the expected Cordis plugin identity', () => {
     expect(name).toBe('dsh-tool-gate')
-    expect(inject).toEqual(['tools'])
+    expect(inject).toEqual(['tools', 'agents'])
   })
 
-  it('starts enabled without debug logging', () => {
-    expect(DEFAULT_CONFIG).toEqual({ enabled: true, debug: false })
+  it('defaults to automatic MCP gating with a small native launcher', () => {
+    expect(DEFAULT_CONFIG).toEqual({
+      enabled: true,
+      autoMcp: true,
+      toolsets: [],
+      launcherToolName: 'enable_toolset',
+      debug: false,
+    })
   })
 })
