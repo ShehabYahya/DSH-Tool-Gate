@@ -18,8 +18,8 @@ export interface AgentGateOptions {
 
 export type InternalMutation = <T>(operation: () => T) => T
 
-function schemasForAgent(agent: Agent): ToolSchemaLike[] {
-  return agent.ctx.tools.schemas().map(schema => ({
+function schemasForAgent(rootCtx: Context, agent: Agent): ToolSchemaLike[] {
+  return rootCtx.tools.schemas(agent).map(schema => ({
     name: schema.name,
     description: schema.description,
     parameters: schema.parameters,
@@ -118,7 +118,7 @@ export class AgentToolGate {
     readonly options: AgentGateOptions,
     private readonly internalMutation: InternalMutation,
   ) {
-    this.catalog = buildCatalog(schemasForAgent(agent), {
+    this.catalog = buildCatalog(schemasForAgent(rootCtx, agent), {
       autoMcp: options.autoMcp,
       rules: options.rules,
     })
@@ -143,7 +143,7 @@ export class AgentToolGate {
     this.internalMutation(() => {
       this.restrictionDispose?.()
       this.restrictionDispose = undefined
-      this.catalog = buildCatalog(schemasForAgent(this.agent), {
+      this.catalog = buildCatalog(schemasForAgent(this.rootCtx, this.agent), {
         autoMcp: this.options.autoMcp,
         rules: this.options.rules,
       })
