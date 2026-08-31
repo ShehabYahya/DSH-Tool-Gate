@@ -10,7 +10,7 @@ DSH Tool Gate keeps specialist capability groups in DSH's real registry but remo
 
 ```text
 Session starts
-  bash / filesystem / normal tools
+  agent-preset tools immediately visible
   CCE / other always-on tools
   enable_toolset
 
@@ -76,17 +76,34 @@ config:
 
 Explicit rules take precedence over automatic MCP grouping and can also mark a group `always`.
 
+## Agent preset precedence
+
+An agent preset is the agent's normal working capability surface. Tool Gate does **not** hide ordinary tools merely because they were registered by the preset. Normal preset tools such as shell, filesystem, search, todo, subagent, workflow, and similar native DSH capabilities are visible from the first model request.
+
+The default precedence is:
+
+```text
+ordinary agent-preset tool     -> visible immediately
+ordinary ungrouped plugin tool -> visible immediately
+explicit visibility: always    -> visible immediately
+MCP tool with autoMcp: true     -> lazy
+explicit visibility: lazy      -> lazy
+```
+
+MCP classification remains capability policy even when an MCP client is mounted as a row inside the agent preset. For example, a preset may provide `bash`, `read_file`, and Blender MCP together; `bash` and `read_file` remain visible immediately while the Blender schemas stay behind `enable_toolset("blender")`. This preserves the preset's normal working tools without giving up the token savings that motivated Tool Gate.
+
 ## Runtime behavior
 
 Tool Gate installs one agent-scoped controller before the agent's first driving request. It:
 
-1. Reads that agent's effective native tool surface.
-2. Builds capability groups.
-3. Applies `agent.ctx.tools.restrict({ deny: [...] })` for lazy groups.
-4. Registers a tiny scoped `enable_toolset` tool.
-5. Replaces the restriction when a toolset is enabled.
-6. Keeps enabled groups sticky for the rest of that agent lifecycle.
-7. Rebuilds the catalog after real `tools/change` events such as MCP list changes or plugin hot reload.
+1. Reads that agent's effective native tool surface, including its preset composition.
+2. Leaves ordinary preset/ungrouped tools visible.
+3. Builds capability groups for automatic MCP and explicitly configured toolsets.
+4. Applies `agent.ctx.tools.restrict({ deny: [...] })` only for lazy groups.
+5. Registers a tiny scoped `enable_toolset` tool.
+6. Replaces the restriction when a toolset is enabled.
+7. Keeps enabled groups sticky for the rest of that agent lifecycle.
+8. Rebuilds the catalog after real `tools/change` events such as MCP list changes or plugin hot reload.
 
 Other agents are unaffected.
 
@@ -127,6 +144,7 @@ Example with an additional plugin group:
 
 ## Design invariants
 
+- **Preset working surface stays immediate.** Ordinary tools supplied by the selected agent preset are visible on the first request unless a deliberate lazy policy classifies them.
 - **Native execution stays authoritative.** Tool Gate only controls visibility.
 - **Hidden means unavailable.** DSH's same scoped registry view controls presentation, lookup, and execution.
 - **Agent-local.** One agent loading Blender does not expose Blender to another agent.
@@ -146,7 +164,7 @@ src/
 tests/
   scaffold.spec.ts  plugin contract
   catalog.spec.ts   discovery/grouping/metrics
-  gate.spec.ts      scoped visibility + native execution lifecycle
+  gate.spec.ts      scoped visibility + preset/MCP/native execution lifecycle
 
 docs/
   ARCHITECTURE.md   design, DSH findings, and invariants
@@ -166,4 +184,4 @@ Target runtime: modern DeepSeek Harness / Node.js 22.19+.
 
 ## Status
 
-**MVP runtime implemented.** Automatic MCP grouping, per-agent native gating, sticky `enable_toolset`, explicit plugin groups, schema/token diagnostics, hot-change refresh, and scoped execution tests are present.
+**MVP runtime implemented.** Automatic MCP grouping, immediate ordinary preset tools, per-agent native gating, sticky `enable_toolset`, explicit plugin groups, schema/token diagnostics, hot-change refresh, and scoped execution tests are present.
