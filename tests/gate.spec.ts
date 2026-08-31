@@ -27,6 +27,22 @@ async function mintAgent(ctx: Context, id: string): Promise<{ agent: Agent; scop
   return { agent: key, scope }
 }
 
+async function mintPresetAgent(ctx: Context, id: string): Promise<{ agent: Agent; scope: Scope; presetScope: Scope }> {
+  const presetKey = {}
+  let presetScope!: Scope
+  await ctx.plugin(Object.assign((inner: Context) => {
+    presetScope = createScope(inner, presetKey)
+  }, { inject: ['tools', 'systemPrompt'] }))
+
+  const key = { id } as unknown as Agent
+  let scope!: Scope
+  await ctx.plugin(Object.assign((inner: Context) => {
+    scope = createScope(inner, key, { parent: presetKey })
+  }, { inject: ['tools', 'systemPrompt'] }))
+  Object.defineProperty(key, 'ctx', { value: scope.ctx })
+  return { agent: key, scope, presetScope }
+}
+
 function tool(name: string): ToolDefinition {
   return {
     name,
@@ -92,6 +108,35 @@ describe('AgentToolGate', () => {
     const launcher = ctx.tools.get('enable_toolset', gated.agent)
     expect(launcher?.description).toContain('blender [available]')
     expect(launcher?.description).toContain('godot-ai [available]')
+  })
+
+  it('keeps ordinary agent-preset tools visible immediately while preset-mounted MCP tools stay lazy', async () => {
+    const ctx = await mount()
+    const { agent, presetScope } = await mintPresetAgent(ctx, 'preset-agent')
+
+    // This mirrors DSH's standing preset scope: normal model-facing tools and
+    // an MCP client can both register into the preset layer inherited by the agent.
+    presetScope.ctx.tools.register(tool('bash'))
+    presetScope.ctx.tools.register(tool('read_file'))
+    presetScope.ctx.tools.register(tool('mcp__blender__get_scene'))
+    presetScope.ctx.tools.register(tool('mcp__blender__pose_bone'))
+
+    const controller = gate(ctx, agent)
+    controller.install()
+
+    // Preset-native tools are part of the agent's immediate working surface.
+    expect(names(ctx, agent)).toEqual(['bash', 'enable_toolset', 'read_file'])
+
+    // MCP remains a deliberately lazy capability even when its client row is
+    // mounted by the preset; enabling it reveals the original native tools.
+    controller.enable('blender')
+    expect(names(ctx, agent)).toEqual([
+      'bash',
+      'enable_toolset',
+      'mcp__blender__get_scene',
+      'mcp__blender__pose_bone',
+      'read_file',
+    ])
   })
 
   it('loads one complete native MCP suite and keeps unrelated suites hidden', async () => {
