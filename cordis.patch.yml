@@ -1,0 +1,7 @@
+# DSH bundle entry. Runtime gating is intentionally not implemented in the scaffold yet.
+- insert:
+    - id: dsh-tool-gate
+      name: dsh-tool-gate
+      config:
+        enabled: true
+        debug: false
