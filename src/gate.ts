@@ -134,15 +134,18 @@ export class AgentToolGate {
   }
 
   /**
-   * Re-discover after a real registry change. The current Tool Gate restriction
-   * is lifted and rebuilt synchronously with no await point, so no model request
-   * can interleave between the two visibility states on the JS event loop.
+   * Re-discover after a real registry change. Tool Gate temporarily removes
+   * only its own scoped launcher/restriction, snapshots the agent's underlying
+   * effective surface, then rebuilds synchronously with no await point.
    */
   refresh(): void {
     if (this.disposed) return
     this.internalMutation(() => {
+      this.launcherDispose?.()
+      this.launcherDispose = undefined
       this.restrictionDispose?.()
       this.restrictionDispose = undefined
+
       this.catalog = buildCatalog(schemasForAgent(this.rootCtx, this.agent), {
         autoMcp: this.options.autoMcp,
         rules: this.options.rules,
