@@ -1,7 +1,17 @@
-# DSH bundle entry. Runtime gating is intentionally not implemented in the scaffold yet.
+# DSH Tool Gate: MCP suites are discovered automatically from DSH's stable
+# mcp__<serverName>__<tool> public naming contract. Non-MCP plugin groups can
+# be declared below with explicit public-tool globs.
 - insert:
     - id: dsh-tool-gate
       name: dsh-tool-gate
       config:
         enabled: true
+        autoMcp: true
+        launcherToolName: enable_toolset
         debug: false
+        toolsets: []
+        # Example plugin group:
+        # - id: github
+        #   description: GitHub repository, issue, and pull-request operations.
+        #   match: ["github_*"]
+        #   visibility: lazy
