@@ -1,6 +1,52 @@
 # DSH Tool Gate
 
-**Dynamic capability gating for DeepSeek Harness that reduces token usage and context bloat by keeping large MCP/plugin tool schemas hidden by default, then exposing full native toolsets only when an agent needs them.**
+**Progressive capability gating for DeepSeek Harness. Keep large MCP tool schemas out of the model context until the agent actually needs them, then expose the original native tools on demand.**
+
+## Measured result
+
+In my own DeepSeek Harness setup with large Blender and Godot MCP servers, Tool Gate reduced the **fresh-session visible tool-schema footprint from ~31.5K tokens to ~6.7K tokens — a 78.7% reduction (~80%)**.
+
+| Fresh-session metric | Tool Gate OFF | Tool Gate ON | Reduction |
+| --- | ---: | ---: | ---: |
+| Visible tool schemas | ~31.5K tokens | ~6.7K tokens | **78.7%** |
+| Total initial context | ~37.1K tokens | ~9.8K tokens | **73.6%** |
+| First-request input | ~37K tokens | ~9.7K tokens | **73.8%** |
+
+These are measurements from my own DSH configuration, not a universal claim. Savings depend on the number and size of specialist tool suites you normally expose.
+
+### Before — Tool Gate OFF
+
+![Tool Gate OFF: DSH context meter showing ~31.5K tool tokens](docs/benchmark/tool-gate-off.webp)
+
+### After — Tool Gate ON
+
+![Tool Gate ON: DSH context meter showing ~6.7K tool tokens](docs/benchmark/tool-gate-on.webp)
+
+The benchmark used the same model, same agent preset, same simple fresh-session message, and 0% cache hit. The important difference was the visible tool surface.
+
+## Short demo
+
+A fresh session keeps the normal agent-preset tools immediately available while specialist MCP suites stay hidden behind one tiny launcher:
+
+```text
+Fresh session
+├── standard agent-preset tools
+├── enable_toolset
+├── Blender — available, not loaded
+└── Godot AI — available, not loaded
+```
+
+When the agent needs Blender:
+
+```text
+enable_toolset("blender")
+        ↓
+22 original native Blender MCP tools become visible
+        ↓
+Godot remains hidden
+```
+
+There is no `mcp_search` or generic `mcp_call` proxy. Once enabled, the model sees and calls the original native DSH/MCP tools directly.
 
 ## What it does
 
@@ -24,8 +70,6 @@ Later the same session needs Godot
   -> Godot tools are added too
   -> Blender remains loaded
 ```
-
-There is no `mcp_search` or generic `mcp_call` proxy. Once a toolset is enabled, the original native DSH/MCP definitions are what the model sees and executes.
 
 ## Why this saves tokens
 
@@ -90,7 +134,7 @@ MCP tool with autoMcp: true     -> lazy
 explicit visibility: lazy      -> lazy
 ```
 
-MCP classification remains capability policy even when an MCP client is mounted as a row inside the agent preset. For example, a preset may provide `bash`, `read_file`, and Blender MCP together; `bash` and `read_file` remain visible immediately while the Blender schemas stay behind `enable_toolset("blender")`. This preserves the preset's normal working tools without giving up the token savings that motivated Tool Gate.
+MCP classification remains capability policy even when an MCP client is mounted as a row inside the agent preset. For example, a preset may provide `bash`, `read_file`, and Blender MCP together; `bash` and `read_file` remain visible immediately while the Blender schemas stay behind `enable_toolset("blender")`.
 
 ## Runtime behavior
 
@@ -168,6 +212,7 @@ tests/
 
 docs/
   ARCHITECTURE.md   design, DSH findings, and invariants
+  benchmark/        before/after context-meter screenshots
 
 cordis.patch.yml    DSH bundle/profile insertion
 ```
@@ -175,13 +220,15 @@ cordis.patch.yml    DSH bundle/profile insertion
 ## Development
 
 ```bash
-npm install
-npm run check
-npm run build
+pnpm install
+pnpm run check
+pnpm run build
 ```
 
 Target runtime: modern DeepSeek Harness / Node.js 22.19+.
 
-## Status
+## Version 1 status
 
-**MVP runtime implemented.** Automatic MCP grouping, immediate ordinary preset tools, per-agent native gating, sticky `enable_toolset`, explicit plugin groups, schema/token diagnostics, hot-change refresh, and scoped execution tests are present.
+**Version 1 is implemented and locally validated.** TypeScript typecheck passes and the current test suite passes all 16 tests, covering automatic MCP grouping, immediate ordinary preset tools, per-agent native gating, sticky `enable_toolset`, explicit plugin groups, schema/token diagnostics, hot-change refresh, scoped execution, and preset/MCP visibility behavior.
+
+This is an unofficial community plugin for DeepSeek Harness.
