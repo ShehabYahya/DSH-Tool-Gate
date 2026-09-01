@@ -1,6 +1,6 @@
 {
   "name": "dsh-tool-gate",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Dynamic capability gating for DeepSeek Harness that reduces token usage by exposing large MCP/plugin toolsets only when an agent needs them.",
   "keywords": [
     "deepseek",
