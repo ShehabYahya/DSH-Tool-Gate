@@ -57,6 +57,13 @@ export const Config: z<Config> = z.object({
   debug: z.boolean().default(DEFAULT_CONFIG.debug),
 }) as unknown as z<Config>
 
+function isInactiveEffectError(error: unknown): boolean {
+  return typeof error === 'object'
+    && error !== null
+    && 'code' in error
+    && (error as { code?: unknown }).code === 'INACTIVE_EFFECT'
+}
+
 /** Install lifecycle listeners and one controller per live agent. */
 export function apply(ctx: Context, rawConfig: Config): void {
   const config: Config = {
@@ -83,7 +90,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
   }
 
   const install = (agent: Agent): void => {
-    if (!active || controllers.has(agent)) return
+    if (!active || controllers.has(agent) || agent.ctx.fiber.uid === null) return
     const controller = new AgentToolGate(ctx, agent, {
       autoMcp: config.autoMcp,
       rules: config.toolsets,
@@ -91,6 +98,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       debug: config.debug,
     }, internalMutation)
     controller.install()
+    if (!controller.active) return
     controllers.set(agent, controller)
   }
 
@@ -104,7 +112,27 @@ export function apply(ctx: Context, rawConfig: Config): void {
   const refreshAll = (): void => {
     refreshScheduled = false
     if (!active) return
-    for (const controller of controllers.values()) controller.refresh()
+
+    // A tools/change event is deliberately coalesced into a microtask. By the
+    // time that microtask runs, an agent scope may already have been disposed
+    // or replaced. Treat that as normal lifecycle churn, not a process-fatal
+    // error, and isolate unexpected controller failures from the DSH process.
+    for (const [agent, controller] of [...controllers]) {
+      if (!controller.active) {
+        disposeAgent(agent)
+        continue
+      }
+
+      try {
+        controller.refresh()
+      } catch (error: unknown) {
+        if (!controller.active || isInactiveEffectError(error)) {
+          disposeAgent(agent)
+          continue
+        }
+        ctx.logger.error(`dsh-tool-gate(${agent.id}): failed to refresh gate: ${String(error)}`)
+      }
+    }
   }
 
   // Hot-load/reload: cover sessions that already existed before this plugin.
@@ -116,6 +144,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
     try {
       install(agent)
     } catch (error: unknown) {
+      if (isInactiveEffectError(error) || agent.ctx.fiber.uid === null) return
       ctx.logger.error(`dsh-tool-gate(${agent.id}): failed to install gate: ${String(error)}`)
     }
   })
