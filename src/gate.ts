@@ -110,6 +110,7 @@ export class AgentToolGate {
   readonly enabledToolsets = new Set<string>()
   private restrictionDispose: (() => void) | undefined
   private launcherDispose: (() => void) | undefined
+  private lifecycleDispose: (() => void) | undefined
   private disposed = false
 
   constructor(
@@ -124,12 +125,32 @@ export class AgentToolGate {
     })
   }
 
+  /** Whether this controller still owns a live Cordis agent context. */
+  get active(): boolean {
+    return !this.disposed && this.contextActive()
+  }
+
   install(): void {
     if (this.disposed) throw new Error('cannot install a disposed Tool Gate controller')
-    this.internalMutation(() => {
-      this.replaceRestriction(false)
-      this.replaceLauncher()
-    })
+    if (!this.contextActive()) throw new Error('cannot install Tool Gate on an inactive agent context')
+
+    // agent/disposed can lag behind scope/fiber teardown. Bind directly to the
+    // context that owns restrict()/register() so this controller is invalidated
+    // as soon as Cordis starts disposing that context.
+    this.lifecycleDispose = this.agent.ctx.effect(() => () => {
+      this.lifecycleDispose = undefined
+      this.dispose()
+    }, `dsh-tool-gate(${this.agent.id}).agent-lifecycle`)
+
+    try {
+      this.internalMutation(() => {
+        this.replaceRestriction(false)
+        this.replaceLauncher()
+      })
+    } catch (error) {
+      this.dispose()
+      throw error
+    }
     this.logSavings('installed')
   }
 
@@ -139,7 +160,10 @@ export class AgentToolGate {
    * effective surface, then rebuilds synchronously with no await point.
    */
   refresh(): void {
-    if (this.disposed) return
+    if (!this.active) {
+      this.dispose()
+      return
+    }
     this.internalMutation(() => {
       this.launcherDispose?.()
       this.launcherDispose = undefined
@@ -154,14 +178,27 @@ export class AgentToolGate {
       for (const id of [...this.enabledToolsets]) {
         if (!knownIds.has(id)) this.enabledToolsets.delete(id)
       }
+
+      // Disposing the old scoped effects can synchronously trigger other
+      // lifecycle listeners. Never create replacement effects if that made the
+      // owning agent context inactive.
+      if (!this.contextActive()) return
       this.replaceRestriction(false)
       this.replaceLauncher()
     })
+
+    if (!this.contextActive()) {
+      this.dispose()
+      return
+    }
     this.logSavings('refreshed')
   }
 
   enable(toolsetId: string): EnableToolsetResult {
-    if (this.disposed) throw new Error('Tool Gate controller is disposed')
+    if (!this.active) {
+      this.dispose()
+      throw new Error('Tool Gate controller is inactive')
+    }
     const toolset = this.catalog.toolsets.find(candidate => candidate.id === toolsetId)
     if (toolset === undefined || toolset.defaultVisibility !== 'lazy') {
       const available = this.catalog.toolsets
@@ -192,12 +229,23 @@ export class AgentToolGate {
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+
+    const lifecycleDispose = this.lifecycleDispose
+    this.lifecycleDispose = undefined
+    lifecycleDispose?.()
+
     this.internalMutation(() => {
       this.launcherDispose?.()
       this.launcherDispose = undefined
       this.restrictionDispose?.()
       this.restrictionDispose = undefined
     })
+  }
+
+  private contextActive(): boolean {
+    // Cordis Fiber.assertActive() uses this exact condition before allowing a
+    // new effect. tools.restrict()/register() ultimately create effects.
+    return this.agent.ctx.fiber.uid !== null
   }
 
   private hiddenToolNames(): string[] {
@@ -214,6 +262,8 @@ export class AgentToolGate {
    * mask before lifting the old one, so expansion has no transient overexposure.
    */
   private replaceRestriction(registerBeforeDispose: boolean): void {
+    if (!this.contextActive()) return
+
     const denied = this.hiddenToolNames()
     const old = this.restrictionDispose
 
@@ -231,6 +281,8 @@ export class AgentToolGate {
   }
 
   private replaceLauncher(): void {
+    if (!this.contextActive()) return
+
     const old = this.launcherDispose
     old?.()
     this.launcherDispose = this.agent.ctx.tools.register(createLauncherDefinition(this))
