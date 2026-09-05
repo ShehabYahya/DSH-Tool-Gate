@@ -39,11 +39,12 @@ jobs:
           export DSH_HOME="$RUNNER_TEMP/dsh-tool-gate-smoke"
           TARBALL="$(find "$GITHUB_WORKSPACE/artifacts" -name 'dsh-tool-gate-*.tgz' -print -quit)"
           test -n "$TARBALL"
-          npx -y @deepseek-ai/dsh@0.1.0-rc.7 plugin --profile smoke add -w "$TARBALL"
-          npx -y @deepseek-ai/dsh@0.1.0-rc.7 --profile smoke --dump-config | tee "$RUNNER_TEMP/tool-gate-config.txt"
+          DSH=(pnpm --silent dlx @deepseek-ai/dsh@0.1.0-rc.7)
+          "${DSH[@]}" plugin --profile smoke add -w "$TARBALL"
+          "${DSH[@]}" --profile smoke --dump-config | tee "$RUNNER_TEMP/tool-gate-config.txt"
           grep -q 'dsh-tool-gate' "$RUNNER_TEMP/tool-gate-config.txt"
-          npx -y @deepseek-ai/dsh@0.1.0-rc.7 plugin --profile smoke remove -w dsh-tool-gate
-          npx -y @deepseek-ai/dsh@0.1.0-rc.7 --profile smoke --dump-config > "$RUNNER_TEMP/tool-gate-config-after-remove.txt"
+          "${DSH[@]}" plugin --profile smoke remove -w dsh-tool-gate
+          "${DSH[@]}" --profile smoke --dump-config > "$RUNNER_TEMP/tool-gate-config-after-remove.txt"
           if grep -q 'dsh-tool-gate' "$RUNNER_TEMP/tool-gate-config-after-remove.txt"; then
             echo 'Tool Gate still appears after uninstall' >&2
             exit 1
