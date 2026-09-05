@@ -24,7 +24,8 @@ jobs:
           export DSH_HOME="$RUNNER_TEMP/dsh-tool-gate-latest"
           TARBALL="$(find "$GITHUB_WORKSPACE/artifacts" -name 'dsh-tool-gate-*.tgz' -print -quit)"
           test -n "$TARBALL"
-          npx -y @deepseek-ai/dsh@latest --version
-          npx -y @deepseek-ai/dsh@latest plugin --profile smoke add -w "$TARBALL"
-          npx -y @deepseek-ai/dsh@latest --profile smoke --dump-config | tee "$RUNNER_TEMP/latest-config.txt"
+          DSH=(pnpm --silent dlx @deepseek-ai/dsh@latest)
+          "${DSH[@]}" --version
+          "${DSH[@]}" plugin --profile smoke add -w "$TARBALL"
+          "${DSH[@]}" --profile smoke --dump-config | tee "$RUNNER_TEMP/latest-config.txt"
           grep -q 'dsh-tool-gate' "$RUNNER_TEMP/latest-config.txt"
