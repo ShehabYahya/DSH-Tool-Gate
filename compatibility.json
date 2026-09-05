@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "node": {
+    "minimum": "22.19.0"
+  },
+  "dsh": {
+    "testedCliVersions": [
+      "0.1.0-rc.7"
+    ],
+    "blockedCliVersions": []
+  }
+}
