@@ -30,7 +30,7 @@ export async function runUninstall(
     return 0
   }
 
-  const remove = await deps.runner.run('dsh', ['plugin', '--profile', options.profile, 'remove', 'dsh-tool-gate'])
+  const remove = await deps.runner.run('dsh', ['plugin', '--profile', options.profile, 'remove', '-w', 'dsh-tool-gate'])
   if (remove.code !== 0) {
     deps.writer.error('DSH plugin removal failed.')
     if (remove.stderr.trim()) deps.writer.error(remove.stderr.trim())
