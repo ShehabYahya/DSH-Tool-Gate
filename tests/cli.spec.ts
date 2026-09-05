@@ -41,7 +41,7 @@ describe('CLI install lifecycle', () => {
     const runner = new RecordingRunner({
       'dsh --version': { code: 0, stdout: '0.1.0-rc.7\n', stderr: '' },
       'pnpm --version': { code: 0, stdout: '10.17.0\n', stderr: '' },
-      'dsh plugin --profile web add dsh-tool-gate': { code: 0, stdout: 'ok', stderr: '' },
+      'dsh plugin --profile web add -w dsh-tool-gate': { code: 0, stdout: 'ok', stderr: '' },
       'dsh --profile web --dump-config': { code: 0, stdout: '# == dsh-tool-gate\n- id: dsh-tool-gate\n', stderr: '' },
     })
 
@@ -51,14 +51,14 @@ describe('CLI install lifecycle', () => {
     )
 
     expect(code).toBe(0)
-    expect(runner.calls).toContain('dsh plugin --profile web add dsh-tool-gate')
+    expect(runner.calls).toContain('dsh plugin --profile web add -w dsh-tool-gate')
     expect(lines.join('\n')).toContain('Bundle layer appears')
   })
 
   it('removes the package through DSH and verifies the declarations disappear', async () => {
     const lines: string[] = []
     const runner = new RecordingRunner({
-      'dsh plugin --profile web remove dsh-tool-gate': { code: 0, stdout: 'ok', stderr: '' },
+      'dsh plugin --profile web remove -w dsh-tool-gate': { code: 0, stdout: 'ok', stderr: '' },
       'dsh --profile web --dump-config': { code: 0, stdout: '# base only\n', stderr: '' },
     })
     let inspections = 0
@@ -78,6 +78,6 @@ describe('CLI install lifecycle', () => {
     )
 
     expect(code).toBe(0)
-    expect(runner.calls).toContain('dsh plugin --profile web remove dsh-tool-gate')
+    expect(runner.calls).toContain('dsh plugin --profile web remove -w dsh-tool-gate')
   })
 })
