@@ -1,0 +1,138 @@
+name: Publish npm and GitHub Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag matching package.json, for example v1.0.1'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install release tooling
+        run: npm install -g npm@11 pnpm@10
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Verify source
+        run: |
+          pnpm run check
+          pnpm run build
+
+      - name: Resolve and validate release metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            TAG='${{ inputs.tag }}'
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+
+          PACKAGE="$(node -p "require('./package.json').name")"
+          VERSION="$(node -p "require('./package.json').version")"
+          EXPECTED_TAG="v${VERSION}"
+
+          if [[ "$TAG" != "$EXPECTED_TAG" ]]; then
+            echo "Release tag $TAG does not match package.json version $VERSION (expected $EXPECTED_TAG)." >&2
+            exit 1
+          fi
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "package=$PACKAGE" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure release tag exists
+        shell: bash
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if git rev-parse "refs/tags/$TAG" >/dev/null 2>&1; then
+            TAG_COMMIT="$(git rev-list -n 1 "$TAG")"
+            HEAD_COMMIT="$(git rev-parse HEAD)"
+            if [[ "$TAG_COMMIT" != "$HEAD_COMMIT" ]]; then
+              echo "Tag $TAG points to $TAG_COMMIT but this workflow is building $HEAD_COMMIT." >&2
+              exit 1
+            fi
+          else
+            git tag "$TAG"
+            git push origin "refs/tags/$TAG"
+          fi
+
+      - name: Pack release artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-artifacts
+          npm pack --pack-destination release-artifacts
+
+      - name: Publish to npm if needed
+        id: npm_publish
+        shell: bash
+        env:
+          PACKAGE: ${{ steps.meta.outputs.package }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          if npm view "$PACKAGE@$VERSION" version >/dev/null 2>&1; then
+            echo "$PACKAGE@$VERSION already exists on npm; skipping publish."
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          else
+            npm publish
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify npm registry
+        shell: bash
+        env:
+          PACKAGE: ${{ steps.meta.outputs.package }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          PUBLISHED_VERSION="$(npm view "$PACKAGE@$VERSION" version)"
+          if [[ "$PUBLISHED_VERSION" != "$VERSION" ]]; then
+            echo "Registry verification failed: expected $VERSION, got $PUBLISHED_VERSION" >&2
+            exit 1
+          fi
+
+      - name: Create or update GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          PACKAGE: ${{ steps.meta.outputs.package }}
+        run: |
+          set -euo pipefail
+          ARTIFACT="$(find release-artifacts -name '*.tgz' -print -quit)"
+          test -n "$ARTIFACT"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ARTIFACT" --clobber
+          else
+            gh release create "$TAG" "$ARTIFACT" \
+              --verify-tag \
+              --generate-notes \
+              --title "$PACKAGE $TAG"
+          fi
