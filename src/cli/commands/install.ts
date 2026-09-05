@@ -29,7 +29,10 @@ export async function runInstall(
     deps.writer.out('Installation will continue; the plugin will perform a fail-open runtime API check at startup.')
   }
 
-  const install = await deps.runner.run('dsh', ['plugin', '--profile', options.profile, 'add', options.packageSpec])
+  // DSH forwards these arguments directly to pnpm inside the profile directory.
+  // Explicit -w makes the intended profile workspace-root mutation reliable
+  // across pnpm versions that otherwise reject add/remove at a workspace root.
+  const install = await deps.runner.run('dsh', ['plugin', '--profile', options.profile, 'add', '-w', options.packageSpec])
   if (install.code !== 0) {
     deps.writer.error('DSH plugin installation failed.')
     if (install.stderr.trim()) deps.writer.error(install.stderr.trim())
