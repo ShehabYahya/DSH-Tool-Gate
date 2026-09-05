@@ -11,10 +11,14 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-tools'
 import z from '@deepseek-ai/schemastery'
+import { checkAgentRuntime, checkRootRuntime } from './compatibility/runtime.js'
+import { issueSummary } from './compatibility/types.js'
 import { AgentToolGate } from './gate.js'
 import type { ToolsetRule } from './types.js'
 
 export * from './catalog.js'
+export * from './compatibility/runtime.js'
+export * from './compatibility/types.js'
 export * from './gate.js'
 export * from './types.js'
 
@@ -75,6 +79,15 @@ export function apply(ctx: Context, rawConfig: Config): void {
   }
   if (!config.enabled) return
 
+  // Compatibility failures must be fail-open: if the host no longer exposes
+  // the DSH capabilities Tool Gate depends on, install no restrictions and no
+  // launcher so the agent sees the normal native tool surface.
+  const rootCompatibility = checkRootRuntime(ctx)
+  if (rootCompatibility.status === 'incompatible') {
+    ctx.logger.warn(`dsh-tool-gate: incompatible DSH runtime; disabled without changing tool visibility. ${issueSummary(rootCompatibility)}`)
+    return
+  }
+
   const controllers = new Map<Agent, AgentToolGate>()
   let internalMutationDepth = 0
   let refreshScheduled = false
@@ -90,7 +103,14 @@ export function apply(ctx: Context, rawConfig: Config): void {
   }
 
   const install = (agent: Agent): void => {
-    if (!active || controllers.has(agent) || agent.ctx.fiber.uid === null) return
+    if (!active || controllers.has(agent)) return
+    const compatibility = checkAgentRuntime(agent)
+    if (compatibility.status === 'incompatible') {
+      ctx.logger.warn(`dsh-tool-gate(${agent.id}): incompatible agent runtime; leaving native tool visibility unchanged. ${issueSummary(compatibility)}`)
+      return
+    }
+    if (agent.ctx.fiber.uid === null) return
+
     const controller = new AgentToolGate(ctx, agent, {
       autoMcp: config.autoMcp,
       rules: config.toolsets,
@@ -144,7 +164,9 @@ export function apply(ctx: Context, rawConfig: Config): void {
     try {
       install(agent)
     } catch (error: unknown) {
-      if (isInactiveEffectError(error) || agent.ctx.fiber.uid === null) return
+      const compatibility = checkAgentRuntime(agent)
+      if (isInactiveEffectError(error) || compatibility.status === 'incompatible') return
+      if (agent.ctx.fiber.uid === null) return
       ctx.logger.error(`dsh-tool-gate(${agent.id}): failed to install gate: ${String(error)}`)
     }
   })

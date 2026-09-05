@@ -1,0 +1,31 @@
+name: Latest DSH compatibility
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 6 * * *'
+
+jobs:
+  latest-dsh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm install -g pnpm@10
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm run check
+      - run: mkdir -p artifacts && npm pack --pack-destination artifacts
+      - name: Smoke test against current npm latest DSH
+        shell: bash
+        run: |
+          set -euo pipefail
+          export DSH_HOME="$RUNNER_TEMP/dsh-tool-gate-latest"
+          TARBALL="$(find "$GITHUB_WORKSPACE/artifacts" -name 'dsh-tool-gate-*.tgz' -print -quit)"
+          test -n "$TARBALL"
+          DSH=(pnpm --silent dlx @deepseek-ai/dsh@latest)
+          "${DSH[@]}" --version
+          "${DSH[@]}" plugin --profile smoke add -w "$TARBALL"
+          "${DSH[@]}" --profile smoke --dump-config | tee "$RUNNER_TEMP/latest-config.txt"
+          grep -q 'dsh-tool-gate' "$RUNNER_TEMP/latest-config.txt"

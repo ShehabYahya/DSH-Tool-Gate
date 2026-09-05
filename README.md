@@ -24,6 +24,42 @@ These are measurements from my own DSH configuration, not a universal claim. Sav
 
 The benchmark used the same model, same agent preset, same simple fresh-session message, and 0% cache hit. The important difference was the visible tool surface.
 
+## Install
+
+After the package is published to npm, the recommended path is the self-checking installer:
+
+```bash
+npx dsh-tool-gate install --profile web
+```
+
+It checks Node.js, DSH, pnpm, the compatibility manifest, installs through DSH's official plugin command, and verifies the resulting composed profile.
+
+You can also use DSH directly:
+
+```bash
+dsh plugin --profile web add dsh-tool-gate
+```
+
+Then restart the profile:
+
+```bash
+dsh web
+```
+
+Diagnose an existing installation at any time:
+
+```bash
+npx dsh-tool-gate doctor --profile web
+```
+
+Machine-readable compatibility output is available with:
+
+```bash
+npx dsh-tool-gate check --json
+```
+
+Tool Gate distinguishes tested DSH releases from newer unverified releases. A new DSH version is not rejected solely because its version number changed. At runtime Tool Gate probes the DSH APIs it actually requires. If those capabilities are incompatible, Tool Gate fails open: it disables itself without installing restrictions, leaving normal native DSH tool visibility unchanged.
+
 ## Short demo
 
 A fresh session keeps the normal agent-preset tools immediately available while specialist MCP suites stay hidden behind one tiny launcher:
@@ -140,14 +176,15 @@ MCP classification remains capability policy even when an MCP client is mounted 
 
 Tool Gate installs one agent-scoped controller before the agent's first driving request. It:
 
-1. Reads that agent's effective native tool surface, including its preset composition.
-2. Leaves ordinary preset/ungrouped tools visible.
-3. Builds capability groups for automatic MCP and explicitly configured toolsets.
-4. Applies `agent.ctx.tools.restrict({ deny: [...] })` only for lazy groups.
-5. Registers a tiny scoped `enable_toolset` tool.
-6. Replaces the restriction when a toolset is enabled.
-7. Keeps enabled groups sticky for the rest of that agent lifecycle.
-8. Rebuilds the catalog after real `tools/change` events such as MCP list changes or plugin hot reload.
+1. Checks that the DSH runtime still exposes the capabilities Tool Gate requires; incompatibility disables Tool Gate without changing tool visibility.
+2. Reads that agent's effective native tool surface, including its preset composition.
+3. Leaves ordinary preset/ungrouped tools visible.
+4. Builds capability groups for automatic MCP and explicitly configured toolsets.
+5. Applies `agent.ctx.tools.restrict({ deny: [...] })` only for lazy groups.
+6. Registers a tiny scoped `enable_toolset` tool.
+7. Replaces the restriction when a toolset is enabled.
+8. Keeps enabled groups sticky for the rest of that agent lifecycle.
+9. Rebuilds the catalog after real `tools/change` events such as MCP list changes or plugin hot reload.
 
 Other agents are unaffected.
 
@@ -193,6 +230,7 @@ Example with an additional plugin group:
 - **Hidden means unavailable.** DSH's same scoped registry view controls presentation, lookup, and execution.
 - **Agent-local.** One agent loading Blender does not expose Blender to another agent.
 - **Sticky expansion.** Enabled suites are not automatically unloaded each turn.
+- **Fail-open compatibility.** Missing required DSH runtime capabilities disable Tool Gate before restrictions are installed.
 - **No fake provenance.** MCP grouping uses DSH's documented naming contract; arbitrary plugin grouping is explicit until DSH exposes registration ownership publicly.
 - **Measurable savings.** Every toolset records tool count, serialized schema bytes, and estimated schema tokens.
 
@@ -200,21 +238,29 @@ Example with an additional plugin group:
 
 ```text
 src/
-  index.ts          plugin config + agent/registry lifecycle
-  gate.ts           per-agent restriction + enable_toolset controller
-  catalog.ts        MCP/custom grouping + token/schema metrics
-  types.ts          public domain types
+  index.ts                    plugin config + agent/registry lifecycle
+  gate.ts                     per-agent restriction + enable_toolset controller
+  catalog.ts                  MCP/custom grouping + token/schema metrics
+  types.ts                    public domain types
+  compatibility/              manifest, environment checks, runtime API probes
+  cli/                        doctor/check/install/uninstall command line interface
 
 tests/
-  scaffold.spec.ts  plugin contract
-  catalog.spec.ts   discovery/grouping/metrics
-  gate.spec.ts      scoped visibility + preset/MCP/native execution lifecycle
+  scaffold.spec.ts            plugin contract
+  catalog.spec.ts             discovery/grouping/metrics
+  gate.spec.ts                scoped visibility + preset/MCP/native execution lifecycle
+  lifecycle.spec.ts           agent lifecycle regression coverage
+  compatibility.spec.ts       version/environment/runtime capability checks
+  fail-open.spec.ts           no-restriction safety guarantees
+  cli.spec.ts                 install/uninstall command behavior
 
 docs/
-  ARCHITECTURE.md   design, DSH findings, and invariants
-  benchmark/        before/after context-meter screenshots
+  ARCHITECTURE.md             design, DSH findings, and invariants
+  benchmark/                  before/after context-meter screenshots
 
-cordis.patch.yml    DSH bundle/profile insertion
+compatibility.json             certified/blocked DSH release metadata
+cordis.patch.yml               DSH bundle/profile insertion
+tsdown.config.ts               plugin + CLI build entries
 ```
 
 ## Development
@@ -229,6 +275,6 @@ Target runtime: modern DeepSeek Harness / Node.js 22.19+.
 
 ## Version 1 status
 
-**Version 1 is implemented and locally validated.** TypeScript typecheck passes and the current test suite passes all 16 tests, covering automatic MCP grouping, immediate ordinary preset tools, per-agent native gating, sticky `enable_toolset`, explicit plugin groups, schema/token diagnostics, hot-change refresh, scoped execution, and preset/MCP visibility behavior.
+**Version 1 is implemented and validated by typecheck, unit/integration tests, fail-open compatibility tests, Node 22/24 builds, and packed-bundle DSH profile smoke testing.** The suite covers automatic MCP grouping, immediate ordinary preset tools, per-agent native gating, sticky `enable_toolset`, explicit plugin groups, schema/token diagnostics, hot-change refresh, scoped execution, preset/MCP visibility behavior, compatibility detection, and installer behavior.
 
 This is an unofficial community plugin for DeepSeek Harness.

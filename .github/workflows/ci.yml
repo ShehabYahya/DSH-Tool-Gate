@@ -5,13 +5,47 @@ on:
   pull_request:
 
 jobs:
-  test:
+  quality:
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22.19.0', '24']
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm install -g pnpm@10
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm run check
+      - run: pnpm run build
+
+  package-smoke:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - run: npm install
-      - run: npm run check
-      - run: npm run build
+      - run: npm install -g pnpm@10
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm run check
+      - run: mkdir -p artifacts && npm pack --pack-destination artifacts
+      - name: Install packed bundle into DSH rc.7
+        shell: bash
+        run: |
+          set -euo pipefail
+          export DSH_HOME="$RUNNER_TEMP/dsh-tool-gate-smoke"
+          TARBALL="$(find "$GITHUB_WORKSPACE/artifacts" -name 'dsh-tool-gate-*.tgz' -print -quit)"
+          test -n "$TARBALL"
+          DSH=(pnpm --silent dlx @deepseek-ai/dsh@0.1.0-rc.7)
+          "${DSH[@]}" plugin --profile smoke add -w "$TARBALL"
+          "${DSH[@]}" --profile smoke --dump-config | tee "$RUNNER_TEMP/tool-gate-config.txt"
+          grep -q 'dsh-tool-gate' "$RUNNER_TEMP/tool-gate-config.txt"
+          "${DSH[@]}" plugin --profile smoke remove -w dsh-tool-gate
+          "${DSH[@]}" --profile smoke --dump-config > "$RUNNER_TEMP/tool-gate-config-after-remove.txt"
+          if grep -q 'dsh-tool-gate' "$RUNNER_TEMP/tool-gate-config-after-remove.txt"; then
+            echo 'Tool Gate still appears after uninstall' >&2
+            exit 1
+          fi
