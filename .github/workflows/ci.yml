@@ -7,6 +7,7 @@ on:
 jobs:
   quality:
     strategy:
+      fail-fast: false
       matrix:
         node: ['22.19.0', '24']
     runs-on: ubuntu-latest
@@ -15,9 +16,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
-      - run: npm install
-      - run: npm run check
-      - run: npm run build
+      - run: npm install -g pnpm@10
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm run check
+      - run: pnpm run build
 
   package-smoke:
     runs-on: ubuntu-latest
@@ -27,8 +29,8 @@ jobs:
         with:
           node-version: '24'
       - run: npm install -g pnpm@10
-      - run: npm install
-      - run: npm run check
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm run check
       - run: mkdir -p artifacts && npm pack --pack-destination artifacts
       - name: Install packed bundle into DSH rc.7
         shell: bash
